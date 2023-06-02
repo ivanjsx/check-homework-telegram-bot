@@ -46,7 +46,6 @@ def send_message(bot: telegram.Bot, message: str) -> None:
         )
     except telegram.error.TelegramError as error:
         raise e.MessageNotSent(f"Ошибка при отправке: {error}")
-
     logging.debug(msg="Успешно отправили сообщение в Телеграм")
 
 
@@ -108,11 +107,15 @@ def get_latest_homework(response: Dict) -> Dict:
     Для корректной работы функции необходимо предварительно гарантировать,
     что список работ в ответе не пуст.
     """
+    if len(response["homeworks"]) == 1:
+        return response["homeworks"][0]
+
     for homework in response["homeworks"]:
         if not homework.get("date_updated"):
             raise e.UnexpectedResponseData(
                 "Не у всех работ указана дата обновления"
             )
+
     return sorted(response["homeworks"],
                   key=lambda homework: homework["date_updated"],
                   reverse=True)[0]
@@ -141,8 +144,31 @@ def parse_status(homework: Dict) -> str:
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
-# def initialize_bot() -> telegram.Bot:
-#     """Инициализируем бота после проверки необходимых токенов."""
+def status_collection() -> str:
+    """
+    Делает всю основную работу бота до момента отправки сообщения.
+    Требует последующей проверки необходимости отправки.
+    """
+    try:
+        response = get_api_answer()
+        check_response(response)
+        homework = get_latest_homework(response)
+        status = parse_status(homework)
+
+    except e.RequestError as error:
+        status = f"Ошибка при запросе к сервису Домашка: {error}"
+        logging.error(status)
+
+    except e.UnexpectedResponseData as error:
+        status = f"Ответ не того формата или типа данных: {error}"
+        logging.error(status)
+
+    except Exception as error:
+        status = f"Неизвестный сбой в работе программы: {error}"
+        logging.error(status)
+
+    finally:
+        return status
 
 
 def main():
@@ -150,54 +176,30 @@ def main():
     try:
         logging.info(msg="Инициализируем бота")
         check_tokens()
-        bot = telegram.Bot(token=TELEGRAM_TOKEN)
     except e.MissingTokenError as error:
-        logging.critical(f"Ошибка при инициализации: {error}")
-        sys.exit()
-    else:
-        logging.info(msg="Успешно завершили инициализацию бота")
-        previous_status = ""
+        message = f"Ошибка при инициализации бота: {error}"
+        logging.critical(message)
+        sys.exit(message)
 
-        while True:
+    bot = telegram.Bot(token=TELEGRAM_TOKEN)
+    logging.info(msg="Успешно завершили инициализацию бота")
+    previous_status = ""
+
+    while True:
+
+        current_status = status_collection()
+
+        if current_status != previous_status:
             try:
-                logging.info(msg="Запускаем итерацию работы бота")
-
-                response = get_api_answer()
-                check_response(response)
-                homework = get_latest_homework(response)
-                current_status = parse_status(homework)
-
-                if current_status == previous_status:
-                    logging.info("Статус не изменился")
-                else:
-                    previous_status = current_status
-                    send_message(bot=bot, message=current_status)
-
-            except e.RequestError as error:
-                message = f"Ошибка при запросе к API сервиса Домашка: {error}"
-                logging.error(message)
-                send_message(bot=bot, message=message)
-
-            except e.UnexpectedResponseData as error:
-                message = f"Ответ не соответствует формату или типу: {error}"
-                logging.error(message)
-                send_message(bot=bot, message=message)
-
+                send_message(bot=bot, message=current_status)
             except e.MessageNotSent as error:
-                message = f"Боту не удалось отправить сообщение: {error}"
-                logging.error(message)
-                send_message(bot=bot, message=message)
+                current_status = f"Не удалось отправить сообщение: {error}"
+                logging.error(current_status)
+        else:
+            logging.info("Статус не изменился")
 
-            except Exception as error:
-                message = f"Неизвестный сбой в работе программы: {error}"
-                logging.error(message)
-                send_message(bot=bot, message=message)
-
-            else:
-                logging.info(msg="Успешно завершили итерацию работы бота")
-
-            finally:
-                time.sleep(RETRY_PERIOD)
+        previous_status = current_status
+        time.sleep(RETRY_PERIOD)
 
 
 if __name__ == "__main__":
