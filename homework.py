@@ -61,13 +61,13 @@ def get_api_answer(timestamp: int = 0) -> Dict:
         response = requests.get(**kwargs)
         status = HTTPStatus(value=response.status_code)
         if status != HTTPStatus.OK:
-            raise e.ResponseStatusNotOk(
+            raise e.RequestError(
                 f"Статус ответа: {status.value} {status.phrase}. "
                 f"Полный текст: {response.text}"
             )
 
     except requests.RequestException as error:
-        raise e.RequestError(f"Ошибка при запросе: {error}")
+        raise e.RequestError(f"Ошибка при совершении запроса: {error}")
 
     logging.info(msg="Получили ответ от эндпоинта API, статус OK")
 
@@ -75,7 +75,7 @@ def get_api_answer(timestamp: int = 0) -> Dict:
         logging.info(msg="Преобразуем ответ в словарь")
         result = response.json()
     except ValueError as error:
-        raise e.InvalidResponseData(f"Не удалось распарсить ответ: {error}")
+        raise e.UnexpectedResponseData(f"Не удалось распарсить ответ: {error}")
 
     logging.info(msg="Успешно привели ответ к словарю")
     return result
@@ -96,8 +96,9 @@ def check_response(response: Dict) -> None:
             'Тип данных списка работ отличается от "list"'
         )
     if not response["homeworks"]:
-        raise e.EmptyHomeworksList(
-            "Ни одна работа пока не взята на проверку"
+        raise e.UnexpectedResponseData(
+            "API вернула пустой список домашних работ: "
+            "ни одна работа пока не взята на проверку"
         )
 
 
@@ -109,7 +110,7 @@ def get_latest_homework(response: Dict) -> Dict:
     """
     for homework in response["homeworks"]:
         if not homework.get("date_updated"):
-            raise e.UnexpectedHomeworkData(
+            raise e.UnexpectedResponseData(
                 "Не у всех работ указана дата обновления"
             )
     return sorted(response["homeworks"],
@@ -123,15 +124,15 @@ def parse_status(homework: Dict) -> str:
     Возвращает подготовленную для отправки в Telegram строку.
     """
     if not homework.get("homework_name"):
-        raise e.UnexpectedHomeworkData(
+        raise e.UnexpectedResponseData(
             "У домашней работы отсутствет название"
         )
     if not homework.get("status"):
-        raise e.UnexpectedHomeworkData(
+        raise e.UnexpectedResponseData(
             "У домашней работы отсутствет статус"
         )
     if not HOMEWORK_VERDICTS.get(homework["status"]):
-        raise e.UnexpectedHomeworkData(
+        raise e.UnexpectedResponseData(
             "Домашняя работа содержит неизвестный статус"
         )
 
@@ -140,10 +141,12 @@ def parse_status(homework: Dict) -> str:
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
+# def initialize_bot() -> telegram.Bot:
+#     """Инициализируем бота после проверки необходимых токенов."""
+
+
 def main():
     """Основная логика работы бота."""
-    previous_status = ""
-
     try:
         logging.info(msg="Инициализируем бота")
         check_tokens()
@@ -153,67 +156,48 @@ def main():
         sys.exit()
     else:
         logging.info(msg="Успешно завершили инициализацию бота")
+        previous_status = ""
 
-    while True:
-        try:
-            logging.info(msg="Запускаем итерацию работы бота")
+        while True:
+            try:
+                logging.info(msg="Запускаем итерацию работы бота")
 
-            response = get_api_answer()
-            check_response(response)
-            homework = get_latest_homework(response)
-            current_status = parse_status(homework)
+                response = get_api_answer()
+                check_response(response)
+                homework = get_latest_homework(response)
+                current_status = parse_status(homework)
 
-            if current_status == previous_status:
-                logging.info("Статус не изменился")
+                if current_status == previous_status:
+                    logging.info("Статус не изменился")
+                else:
+                    previous_status = current_status
+                    send_message(bot=bot, message=current_status)
+
+            except e.RequestError as error:
+                message = f"Ошибка при запросе к API сервиса Домашка: {error}"
+                logging.error(message)
+                send_message(bot=bot, message=message)
+
+            except e.UnexpectedResponseData as error:
+                message = f"Ответ не соответствует формату или типу: {error}"
+                logging.error(message)
+                send_message(bot=bot, message=message)
+
+            except e.MessageNotSent as error:
+                message = f"Боту не удалось отправить сообщение: {error}"
+                logging.error(message)
+                send_message(bot=bot, message=message)
+
+            except Exception as error:
+                message = f"Неизвестный сбой в работе программы: {error}"
+                logging.error(message)
+                send_message(bot=bot, message=message)
+
             else:
-                previous_status = current_status
-                send_message(bot=bot, message=current_status)
+                logging.info(msg="Успешно завершили итерацию работы бота")
 
-        except e.ResponseStatusNotOk as error:
-            message = f"Статус ответа API отличается от OK: {error}"
-            logging.error(message)
-            send_message(bot=bot, message=message)
-
-        except e.RequestError as error:
-            message = f"Ошибка при запросе к API сервиса Домашка: {error}"
-            logging.error(message)
-            send_message(bot=bot, message=message)
-
-        except e.InvalidResponseData as error:
-            message = f"У ответа API неправильный формат данных: {error}"
-            logging.error(message)
-            send_message(bot=bot, message=message)
-
-        except e.UnexpectedResponseData as error:
-            message = f"Ответ API не соответствует документации: {error}"
-            logging.error(message)
-            send_message(bot=bot, message=message)
-
-        except e.EmptyHomeworksList as error:
-            message = f"API вернула пустой список домашних работ: {error}"
-            logging.error(message)
-            send_message(bot=bot, message=message)
-
-        except e.UnexpectedHomeworkData as error:
-            message = f"Данные о работе неправильного формата: {error}"
-            logging.error(message)
-            send_message(bot=bot, message=message)
-
-        except e.MessageNotSent as error:
-            message = f"Боту не удалось отправить сообщение: {error}"
-            logging.error(message)
-            send_message(bot=bot, message=message)
-
-        except Exception as error:
-            message = f"Неизвестный сбой в работе программы: {error}"
-            logging.error(message)
-            send_message(bot=bot, message=message)
-
-        else:
-            logging.info(msg="Успешно завершили итерацию работы бота")
-
-        finally:
-            time.sleep(RETRY_PERIOD)
+            finally:
+                time.sleep(RETRY_PERIOD)
 
 
 if __name__ == "__main__":
