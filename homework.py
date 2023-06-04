@@ -32,8 +32,7 @@ HOMEWORK_VERDICTS = {
 
 def check_tokens() -> None:
     """Проверяет доступность необходимых переменных окружения."""
-    tokens = [PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]
-    return all(tokens)
+    return all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID])
 
 
 def send_message(bot: telegram.Bot, message: str) -> None:
@@ -108,15 +107,11 @@ def get_latest_homework(response: Dict) -> Dict:
     Для корректной работы функции необходимо предварительно гарантировать,
     что список работ в ответе не пуст.
     """
-    if len(response["homeworks"]) == 1:
-        return response["homeworks"][0]
-
     for homework in response["homeworks"]:
         if "date_updated" not in homework:
             raise KeyError(
                 "Не у всех работ указана дата обновления"
             )
-
     return sorted(response["homeworks"],
                   key=lambda homework: homework["date_updated"],
                   reverse=True)[0]
