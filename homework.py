@@ -32,8 +32,8 @@ HOMEWORK_VERDICTS = {
 
 def check_tokens() -> None:
     """Проверяет доступность необходимых переменных окружения."""
-    if not all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
-        raise e.MissingTokenError("Не все переменные окружения доступны")
+    tokens = [PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]
+    return all(tokens)
 
 
 def send_message(bot: telegram.Bot, message: str) -> None:
@@ -53,22 +53,23 @@ def get_api_answer(timestamp: int = 0) -> Dict:
     """Делает запрос к единственному эндпоинту API сервиса Домашка."""
     try:
         logging.info(msg="Посылаем запрос к эндпоинту API")
-        kwargs = {"url": ENDPOINT,
-                  "headers": HEADERS,
-                  "timeout": REQUEST_TIMEOUT_IN_SECONDS,
-                  "params": {"from_date": timestamp}}
-        response = requests.get(**kwargs)
-        status = HTTPStatus(value=response.status_code)
-        if status != HTTPStatus.OK:
-            raise e.RequestError(
-                f"Статус ответа: {status.value} {status.phrase}. "
-                f"Полный текст: {response.text}"
-            )
+        request_params = {"url": ENDPOINT,
+                          "headers": HEADERS,
+                          "timeout": REQUEST_TIMEOUT_IN_SECONDS,
+                          "params": {"from_date": timestamp}}
+        response = requests.get(**request_params)
 
     except requests.RequestException as error:
         raise e.RequestError(f"Ошибка при совершении запроса: {error}")
 
-    logging.info(msg="Получили ответ от эндпоинта API, статус OK")
+    logging.info(msg="Получили ответ от эндпоинта API")
+    status = HTTPStatus(value=response.status_code)
+    if status != HTTPStatus.OK:
+        raise e.RequestError(
+            f"Статус ответа: {status.value} {status.phrase}. "
+            f"Полный текст: {response.text}"
+        )
+    logging.info(msg="Статус ответа OK")
 
     try:
         logging.info(msg="Преобразуем ответ в словарь")
@@ -83,15 +84,15 @@ def get_api_answer(timestamp: int = 0) -> Dict:
 def check_response(response: Dict) -> None:
     """Проверяет преобразованный ответ на соответствие документации."""
     if not isinstance(response, dict):
-        raise e.UnexpectedResponseData(
+        raise TypeError(
             'Тип данных ответа отличается от "dict"'
         )
     if "homeworks" not in response:
-        raise e.UnexpectedResponseData(
+        raise KeyError(
             "В ответе отсутствует ключ со списком работ"
         )
     if not isinstance(response["homeworks"], list):
-        raise e.UnexpectedResponseData(
+        raise TypeError(
             'Тип данных списка работ отличается от "list"'
         )
     if not response["homeworks"]:
@@ -111,8 +112,8 @@ def get_latest_homework(response: Dict) -> Dict:
         return response["homeworks"][0]
 
     for homework in response["homeworks"]:
-        if not homework.get("date_updated"):
-            raise e.UnexpectedResponseData(
+        if "date_updated" not in homework:
+            raise KeyError(
                 "Не у всех работ указана дата обновления"
             )
 
@@ -126,16 +127,16 @@ def parse_status(homework: Dict) -> str:
     Извлекает статус из домашней работы.
     Возвращает подготовленную для отправки в Telegram строку.
     """
-    if not homework.get("homework_name"):
-        raise e.UnexpectedResponseData(
+    if "homework_name" not in homework:
+        raise KeyError(
             "У домашней работы отсутствет название"
         )
-    if not homework.get("status"):
-        raise e.UnexpectedResponseData(
+    if "status" not in homework:
+        raise KeyError(
             "У домашней работы отсутствет статус"
         )
-    if not HOMEWORK_VERDICTS.get(homework["status"]):
-        raise e.UnexpectedResponseData(
+    if homework["status"] not in HOMEWORK_VERDICTS:
+        raise KeyError(
             "Домашняя работа содержит неизвестный статус"
         )
 
@@ -144,40 +145,12 @@ def parse_status(homework: Dict) -> str:
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
-def status_collection() -> str:
-    """
-    Делает всю основную работу бота до момента отправки сообщения.
-    Требует последующей проверки необходимости отправки.
-    """
-    try:
-        response = get_api_answer()
-        check_response(response)
-        homework = get_latest_homework(response)
-        status = parse_status(homework)
-
-    except e.RequestError as error:
-        status = f"Ошибка при запросе к сервису Домашка: {error}"
-        logging.error(status)
-
-    except e.UnexpectedResponseData as error:
-        status = f"Ответ не того формата или типа данных: {error}"
-        logging.error(status)
-
-    except Exception as error:
-        status = f"Неизвестный сбой в работе программы: {error}"
-        logging.error(status)
-
-    finally:
-        return status
-
-
 def main():
     """Основная логика работы бота."""
-    try:
-        logging.info(msg="Инициализируем бота")
-        check_tokens()
-    except e.MissingTokenError as error:
-        message = f"Ошибка при инициализации бота: {error}"
+    logging.info(msg="Инициализируем бота")
+
+    if not check_tokens():
+        message = "Не все переменные окружения доступны"
         logging.critical(message)
         sys.exit(message)
 
@@ -186,17 +159,30 @@ def main():
     previous_status = ""
 
     while True:
+        try:
+            response = get_api_answer()
+            check_response(response)
+            homework = get_latest_homework(response)
+            current_status = parse_status(homework)
+        except (e.UnexpectedResponseData, e.RequestError,
+                TypeError, KeyError) as error:
+            current_status = f"Технические неполадки: {error}"
+            logging.error(current_status)
+        except Exception as error:
+            current_status = f"Неизвестный сбой в работе: {error}"
+            logging.error(current_status)
 
-        current_status = status_collection()
-
-        if current_status != previous_status:
+        if current_status == previous_status:
+            logging.info("Статус не изменился")
+        else:
             try:
                 send_message(bot=bot, message=current_status)
             except e.MessageNotSent as error:
                 current_status = f"Не удалось отправить сообщение: {error}"
                 logging.error(current_status)
-        else:
-            logging.info("Статус не изменился")
+            except Exception as error:
+                current_status = f"Неизвестный сбой в работе: {error}"
+                logging.error(current_status)
 
         previous_status = current_status
         time.sleep(RETRY_PERIOD)
