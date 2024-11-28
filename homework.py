@@ -3,7 +3,6 @@ import os
 import sys
 import time
 from http import HTTPStatus
-from logging import StreamHandler
 from typing import Dict
 
 import requests
@@ -14,14 +13,14 @@ import exceptions as e
 
 load_dotenv()
 
-PRACTICUM_TOKEN = os.getenv("PRACTICUM_TOKEN")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+PRACTICUM_TOKEN = os.getenv("PRACTICUM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-RETRY_PERIOD = 600
-ENDPOINT = "https://practicum.yandex.ru/api/user_api/homework_statuses/"
-HEADERS = {"Authorization": f"OAuth {PRACTICUM_TOKEN}"}
+RETRY_PERIOD_IN_SECONDS = 600
 REQUEST_TIMEOUT_IN_SECONDS = 10
+HEADERS = {"Authorization": f"OAuth {PRACTICUM_TOKEN}"}
+ENDPOINT = "https://practicum.yandex.ru/api/user_api/homework_statuses/"
 
 HOMEWORK_VERDICTS = {
     "reviewing": "Работа взята на проверку ревьюером.",
@@ -30,7 +29,7 @@ HOMEWORK_VERDICTS = {
 }
 
 
-def check_tokens() -> None:
+def check_tokens() -> bool:
     """Проверяет доступность необходимых переменных окружения."""
     return all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID])
 
@@ -38,7 +37,7 @@ def check_tokens() -> None:
 def send_message(bot: telegram.Bot, message: str) -> None:
     """Отправляет сообщение в чат, определяемый окружением."""
     try:
-        logging.info(msg="Запускаем отправку сообщения в Телеграм")
+        logging.debug(msg="Запускаем отправку сообщения в Телеграм")
         bot.send_message(
             chat_id=TELEGRAM_CHAT_ID,
             text=message[:telegram.constants.MAX_MESSAGE_LENGTH],
@@ -168,7 +167,7 @@ def main():
             logging.error(current_status)
 
         if current_status == previous_status:
-            logging.info("Статус не изменился")
+            logging.debug("Статус не изменился")
         else:
             try:
                 send_message(bot=bot, message=current_status)
@@ -180,7 +179,7 @@ def main():
                 logging.error(current_status)
 
         previous_status = current_status
-        time.sleep(RETRY_PERIOD)
+        time.sleep(RETRY_PERIOD_IN_SECONDS)
 
 
 if __name__ == "__main__":
@@ -195,7 +194,7 @@ if __name__ == "__main__":
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.DEBUG)
 
-    handler = StreamHandler(stream=sys.stdout)
+    handler = logging.StreamHandler(stream=sys.stdout)
     formatter = logging.Formatter(
         "%(asctime)s, %(levelname)s, %(name)s, %(lineno)s, %(message)s"
     )
